@@ -14,6 +14,8 @@ This repository provides summarization Schedule Analytics Rules in Sentinel Inci
 - Apply the following role for Managed Identity of logic apps
   - Microsoft Sentinel Responder Role
   - Azure OpenAI User Role
+  - <img width="993" alt="image" src="https://github.com/hisashin0728/SentinelAzureOpenAIQueryCheck/assets/55295601/89d151e4-feb3-42e7-ae85-38bdbea3d894">
+
 - Update RESTAPI URI of POST to Azure OpenAI
   - Azure OpenAI endopont
   - Azure OpenAI DeployModule
