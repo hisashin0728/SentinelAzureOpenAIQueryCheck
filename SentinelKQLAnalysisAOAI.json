@@ -1,0 +1,475 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "metadata": {
+        "title": "Sentinel Scheduled Rule KQL Analysis By AzureOpenAI",
+        "description": "Sentinel Scheduled Rule KQL Analysis By AzureOpenAI",
+        "author": {
+            "name": "Hisashi Nakada"
+        }
+    },
+    "parameters": {
+        "PlaybookName": {
+            "defaultValue": "SentinelKQLAnalysisByAOAI",
+            "type": "string"
+        }
+    },
+    "variables": {
+        "MicrosoftSentinelConnectionName":  "[concat('MicrosoftSentinel-', parameters('PlaybookName'))]",
+        "MicrosoftSentinelConnectionApiId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/Azuresentinel')]"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "[parameters('PlaybookName')]",
+            "location": "japaneast",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "state": "Enabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "triggers": {
+                        "Microsoft_Sentinel_incident": {
+                            "type": "ApiConnectionWebhook",
+                            "inputs": {
+                                "body": {
+                                    "callback_url": "@{listCallbackUrl()}"
+                                },
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                    }
+                                },
+                                "path": "/incident-creation"
+                            }
+                        }
+                    },
+                    "actions": {
+                        "For_each": {
+                            "foreach": "@variables('RuleIdArray')",
+                            "actions": {
+                                "AlertRulesGet": {
+                                    "runAfter": {},
+                                    "type": "Http",
+                                    "inputs": {
+                                        "authentication": {
+                                            "type": "ManagedServiceIdentity"
+                                        },
+                                        "headers": {
+                                            "content-type": "application/json"
+                                        },
+                                        "method": "GET",
+                                        "uri": "https://management.azure.com/subscriptions/@{triggerBody()?['workspaceInfo']?['SubscriptionId']}/resourceGroups/@{triggerBody()?['workspaceInfo']?['ResourceGroupName']}/providers/Microsoft.OperationalInsights/workspaces/@{triggerBody()?['workspaceInfo']?['WorkspaceName']}/providers/Microsoft.SecurityInsights/alertRules/@{last(split(items('For_each'), '/'))}?api-version=2023-02-01"
+                                    }
+                                },
+                                "CheckScheduledRule": {
+                                    "actions": {
+                                        "AzureOpenAIPost": {
+                                            "runAfter": {
+                                                "ParseJSON": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "type": "Http",
+                                            "inputs": {
+                                                "authentication": {
+                                                    "audience": "https://cognitiveservices.azure.com",
+                                                    "type": "ManagedServiceIdentity"
+                                                },
+                                                "body": {
+                                                    "frequency_penalty": 2,
+                                                    "max_tokens": 3000,
+                                                    "messages": [
+                                                        {
+                                                            "content": "You are a Security Analyst.",
+                                                            "role": "system"
+                                                        },
+                                                        {
+                                                            "content": "この Kusto Query を 3000 文字以内で解説して下さい",
+                                                            "role": "user"
+                                                        },
+                                                        {
+                                                            "content": "@{body('ParseJSON')?['properties']?['query']}",
+                                                            "role": "assistant"
+                                                        }
+                                                    ],
+                                                    "stop": null,
+                                                    "temperature": 0
+                                                },
+                                                "headers": {
+                                                    "Content-Type": "application/json"
+                                                },
+                                                "method": "POST",
+                                                "uri": "https://{yourname}.openai.azure.com/openai/deployments/{yourmodel}/chat/completions?api-version=2023-05-15"
+                                            }
+                                        },
+                                        "For_each_2": {
+                                            "foreach": "@body('ParseJSON2')?['choices']",
+                                            "actions": {
+                                                "UpdateSentinelIncidentTask": {
+                                                    "runAfter": {},
+                                                    "type": "ApiConnection",
+                                                    "inputs": {
+                                                        "body": {
+                                                            "incidentArmId": "@triggerBody()?['object']?['id']",
+                                                            "taskDescription": "<p>@{items('For_each_2')?['message']?['content']}<br>\n<br>\n-----<br>\n@{body('ParseJSON')?['properties']?['query']}</p>",
+                                                            "taskTitle": "インシデントルールの説明"
+                                                        },
+                                                        "host": {
+                                                            "connection": {
+                                                                "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                                            }
+                                                        },
+                                                        "method": "post",
+                                                        "path": "/Incidents/CreateTask"
+                                                    }
+                                                }
+                                            },
+                                            "runAfter": {
+                                                "ParseJSON2": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "type": "Foreach"
+                                        },
+                                        "ParseJSON": {
+                                            "runAfter": {},
+                                            "type": "ParseJson",
+                                            "inputs": {
+                                                "content": "@body('AlertRulesGet')",
+                                                "schema": {
+                                                    "properties": {
+                                                        "etag": {
+                                                            "type": "string"
+                                                        },
+                                                        "id": {
+                                                            "type": "string"
+                                                        },
+                                                        "kind": {
+                                                            "type": "string"
+                                                        },
+                                                        "name": {
+                                                            "type": "string"
+                                                        },
+                                                        "properties": {
+                                                            "properties": {
+                                                                "alertDetailsOverride": {
+                                                                    "properties": {
+                                                                        "alertDescriptionFormat": {
+                                                                            "type": "string"
+                                                                        },
+                                                                        "alertDisplayNameFormat": {
+                                                                            "type": "string"
+                                                                        },
+                                                                        "alertSeverityColumnName": {},
+                                                                        "alertTacticsColumnName": {}
+                                                                    },
+                                                                    "type": "object"
+                                                                },
+                                                                "alertRuleTemplateName": {},
+                                                                "customDetails": {
+                                                                    "properties": {
+                                                                        "OperatingSystemName": {
+                                                                            "type": "string"
+                                                                        },
+                                                                        "OperatingSystemType": {
+                                                                            "type": "string"
+                                                                        }
+                                                                    },
+                                                                    "type": "object"
+                                                                },
+                                                                "description": {
+                                                                    "type": "string"
+                                                                },
+                                                                "displayName": {
+                                                                    "type": "string"
+                                                                },
+                                                                "enabled": {
+                                                                    "type": "boolean"
+                                                                },
+                                                                "entityMappings": {
+                                                                    "items": {
+                                                                        "properties": {
+                                                                            "entityType": {
+                                                                                "type": "string"
+                                                                            },
+                                                                            "fieldMappings": {
+                                                                                "items": {
+                                                                                    "properties": {
+                                                                                        "columnName": {
+                                                                                            "type": "string"
+                                                                                        },
+                                                                                        "identifier": {
+                                                                                            "type": "string"
+                                                                                        }
+                                                                                    },
+                                                                                    "required": [
+                                                                                        "identifier",
+                                                                                        "columnName"
+                                                                                    ],
+                                                                                    "type": "object"
+                                                                                },
+                                                                                "type": "array"
+                                                                            }
+                                                                        },
+                                                                        "required": [
+                                                                            "entityType",
+                                                                            "fieldMappings"
+                                                                        ],
+                                                                        "type": "object"
+                                                                    },
+                                                                    "type": "array"
+                                                                },
+                                                                "eventGroupingSettings": {
+                                                                    "properties": {
+                                                                        "aggregationKind": {
+                                                                            "type": "string"
+                                                                        }
+                                                                    },
+                                                                    "type": "object"
+                                                                },
+                                                                "incidentConfiguration": {
+                                                                    "properties": {
+                                                                        "createIncident": {
+                                                                            "type": "boolean"
+                                                                        },
+                                                                        "groupingConfiguration": {
+                                                                            "properties": {
+                                                                                "enabled": {
+                                                                                    "type": "boolean"
+                                                                                },
+                                                                                "groupByAlertDetails": {
+                                                                                    "items": {
+                                                                                        "type": "string"
+                                                                                    },
+                                                                                    "type": "array"
+                                                                                },
+                                                                                "groupByCustomDetails": {
+                                                                                    "items": {
+                                                                                        "type": "string"
+                                                                                    },
+                                                                                    "type": "array"
+                                                                                },
+                                                                                "groupByEntities": {
+                                                                                    "items": {
+                                                                                        "type": "string"
+                                                                                    },
+                                                                                    "type": "array"
+                                                                                },
+                                                                                "lookbackDuration": {
+                                                                                    "type": "string"
+                                                                                },
+                                                                                "matchingMethod": {
+                                                                                    "type": "string"
+                                                                                },
+                                                                                "reopenClosedIncident": {
+                                                                                    "type": "boolean"
+                                                                                }
+                                                                            },
+                                                                            "type": "object"
+                                                                        }
+                                                                    },
+                                                                    "type": "object"
+                                                                },
+                                                                "lastModifiedUtc": {
+                                                                    "type": "string"
+                                                                },
+                                                                "query": {
+                                                                    "type": "string"
+                                                                },
+                                                                "queryFrequency": {
+                                                                    "type": "string"
+                                                                },
+                                                                "queryPeriod": {
+                                                                    "type": "string"
+                                                                },
+                                                                "severity": {
+                                                                    "type": "string"
+                                                                },
+                                                                "suppressionDuration": {
+                                                                    "type": "string"
+                                                                },
+                                                                "suppressionEnabled": {
+                                                                    "type": "boolean"
+                                                                },
+                                                                "tactics": {
+                                                                    "items": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "type": "array"
+                                                                },
+                                                                "triggerOperator": {
+                                                                    "type": "string"
+                                                                },
+                                                                "triggerThreshold": {
+                                                                    "type": "integer"
+                                                                }
+                                                            },
+                                                            "type": "object"
+                                                        },
+                                                        "type": {
+                                                            "type": "string"
+                                                        }
+                                                    },
+                                                    "type": "object"
+                                                }
+                                            }
+                                        },
+                                        "ParseJSON2": {
+                                            "runAfter": {
+                                                "AzureOpenAIPost": [
+                                                    "Succeeded"
+                                                ]
+                                            },
+                                            "type": "ParseJson",
+                                            "inputs": {
+                                                "content": "@body('AzureOpenAIPost')",
+                                                "schema": {
+                                                    "properties": {
+                                                        "choices": {
+                                                            "items": {
+                                                                "properties": {
+                                                                    "finish_reason": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "index": {
+                                                                        "type": "integer"
+                                                                    },
+                                                                    "message": {
+                                                                        "properties": {
+                                                                            "content": {
+                                                                                "type": "string"
+                                                                            },
+                                                                            "role": {
+                                                                                "type": "string"
+                                                                            }
+                                                                        },
+                                                                        "type": "object"
+                                                                    }
+                                                                },
+                                                                "required": [
+                                                                    "index",
+                                                                    "finish_reason",
+                                                                    "message"
+                                                                ],
+                                                                "type": "object"
+                                                            },
+                                                            "type": "array"
+                                                        },
+                                                        "created": {
+                                                            "type": "integer"
+                                                        },
+                                                        "id": {
+                                                            "type": "string"
+                                                        },
+                                                        "model": {
+                                                            "type": "string"
+                                                        },
+                                                        "object": {
+                                                            "type": "string"
+                                                        },
+                                                        "usage": {
+                                                            "properties": {
+                                                                "completion_tokens": {
+                                                                    "type": "integer"
+                                                                },
+                                                                "prompt_tokens": {
+                                                                    "type": "integer"
+                                                                },
+                                                                "total_tokens": {
+                                                                    "type": "integer"
+                                                                }
+                                                            },
+                                                            "type": "object"
+                                                        }
+                                                    },
+                                                    "type": "object"
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "AlertRulesGet": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "expression": {
+                                        "and": [
+                                            {
+                                                "equals": [
+                                                    "@body('AlertRulesGet')?['kind']",
+                                                    "Scheduled"
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "type": "If"
+                                }
+                            },
+                            "runAfter": {
+                                "RuleIdArray": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach"
+                        },
+                        "RuleIdArray": {
+                            "runAfter": {},
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "RuleIdArray",
+                                        "type": "array",
+                                        "value": "@triggerBody()?['object']?['properties']?['relatedAnalyticRuleIds']"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "outputs": {}
+                },
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "azuresentinel": {
+                                "connectionId": "[resourceId('Microsoft.Web/connections', variables('MicrosoftSentinelConnectionName'))]",
+                                "connectionName": "[variables('MicrosoftSentinelConnectionName')]",
+                                "connectionProperties": {
+                                    "authentication": {
+                                        "type": "ManagedServiceIdentity"
+                                    }
+                                },
+                                "id": "[variables('MicrosoftSentinelConnectionApiId')]"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "apiVersion": "2016-06-01",
+            "name": "[variables('MicrosoftSentinelConnectionName')]",
+            "type": "Microsoft.Web/connections",
+            "location": "[resourceGroup().location]",
+            "kind": "V1",
+            "properties": {
+                "displayName": "[variables('MicrosoftSentinelConnectionName')]",
+                "parameterValueType": "Alternative",
+                "api": {
+                    "id": "[variables('MicrosoftSentinelConnectionApiId')]"
+                }
+            }
+        }        
+    ]
+}
