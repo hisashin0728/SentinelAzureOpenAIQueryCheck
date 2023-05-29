@@ -1,5 +1,6 @@
 # SentinelAzureOpenAIQueryCheck
 This repository provides summarization Schedule Analytics Rules in Sentinel Incident
+![image](https://github.com/hisashin0728/SentinelAzureOpenAIQueryCheck/assets/55295601/bd462bab-37ed-4c1e-8cf3-ae141a2706b7)
 
 # Deploy
 > Push to the deploy Azure!
