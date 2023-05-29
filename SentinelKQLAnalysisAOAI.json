@@ -95,7 +95,7 @@
                                                             "role": "system"
                                                         },
                                                         {
-                                                            "content": "この Kusto Query を 3000 文字以内で解説して下さい",
+                                                            "content": "この Kusto Query を Markdown 書式で 3000 文字以内で解説して下さい",
                                                             "role": "user"
                                                         },
                                                         {
